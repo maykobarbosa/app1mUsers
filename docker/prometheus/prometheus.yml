@@ -1,0 +1,9 @@
+# Prometheus scrape config for the API /metrics endpoint.
+# API is behind load balancer; we scrape the api service directly (one replica when scaled).
+scrape_configs:
+  - job_name: 'api'
+    static_configs:
+      - targets: ['api:3000']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout: 10s

@@ -1,0 +1,6 @@
+# Override for production: use pre-built image from GHCR instead of building.
+# Set IMAGE_FULL (e.g. ghcr.io/owner/app1m-users-api:latest) when running deploy.
+services:
+  api:
+    image: ${IMAGE_FULL?IMAGE_FULL is required for production deploy}
+    build: !reset null

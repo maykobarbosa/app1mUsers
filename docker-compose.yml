@@ -1,0 +1,156 @@
+# API is behind the load balancer. To run multiple API replicas:
+#   docker compose up -d --scale api=4
+services:
+  postgres-master:
+    image: postgres:16-alpine
+    container_name: app1m-postgres-master
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app1m
+      POSTGRES_PASSWORD: app1m_secret
+      POSTGRES_DB: app1m_users
+    # Port 5432 not exposed to host to avoid conflict with local Postgres; API/replicas use internal network.
+    volumes:
+      - postgres_master_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-master.sh:/docker-entrypoint-initdb.d/init-master.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app1m -d app1m_users"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres-replica-1:
+    build:
+      context: ./docker/postgres
+      dockerfile: Dockerfile.replica
+    container_name: app1m-postgres-replica-1
+    restart: unless-stopped
+    environment:
+      POSTGRES_MASTER_HOST: postgres-master
+      REPLICATOR_PASSWORD: repl_secret
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - postgres_replica_1_data:/var/lib/postgresql/data
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+
+  postgres-replica-2:
+    build:
+      context: ./docker/postgres
+      dockerfile: Dockerfile.replica
+    container_name: app1m-postgres-replica-2
+    restart: unless-stopped
+    environment:
+      POSTGRES_MASTER_HOST: postgres-master
+      REPLICATOR_PASSWORD: repl_secret
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - postgres_replica_2_data:/var/lib/postgresql/data
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+
+  postgres-replica-3:
+    build:
+      context: ./docker/postgres
+      dockerfile: Dockerfile.replica
+    container_name: app1m-postgres-replica-3
+    restart: unless-stopped
+    environment:
+      POSTGRES_MASTER_HOST: postgres-master
+      REPLICATOR_PASSWORD: repl_secret
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - postgres_replica_3_data:/var/lib/postgresql/data
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: app1m-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  loadbalancer:
+    image: nginx:alpine
+    container_name: app1m-loadbalancer
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+
+  api:
+    build: .
+    # No container_name so we can scale: docker compose up -d --scale api=4
+    restart: unless-stopped
+    # Port 3000 not exposed to host; access API via load balancer (http://localhost:3000)
+    environment:
+      DATABASE_URL: postgresql://app1m:app1m_secret@postgres-master:5432/app1m_users
+      DATABASE_URL_REPLICA_1: postgresql://app1m:app1m_secret@postgres-replica-1:5432/app1m_users
+      DATABASE_URL_REPLICA_2: postgresql://app1m:app1m_secret@postgres-replica-2:5432/app1m_users
+      DATABASE_URL_REPLICA_3: postgresql://app1m:app1m_secret@postgres-replica-3:5432/app1m_users
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_TTL_SECONDS: 3600
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      PORT: 3000
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: app1m-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: app1m-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: http://localhost:3001
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_master_data:
+  postgres_replica_1_data:
+  postgres_replica_2_data:
+  postgres_replica_3_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
